@@ -332,10 +332,10 @@ async function cmdUpdate() {
   }
   ok(`Branch pushed: ${branch}`)
 
-  const prTitle = `update(${target}): sync local changes`
-  const prBody  = `Local skill changes for \`${target}\` submitted via \`d-ai update\`.`
+  const prTitle = 'update(' + target + '): sync local changes'
+  const prBody  = 'Local skill changes for `' + target + '` submitted via `d-ai update`.'
   const pr = run(
-    `gh pr create --repo MaistoMyletojai/ai-skills --base main --head "${branch}" --title "${prTitle}" --body "${prBody}"`,
+    'gh pr create --repo MaistoMyletojai/ai-skills --base main --head "' + branch + '" --title "' + prTitle + '" --body "' + prBody + '"',
     CACHE_DIR
   )
   if (pr.status === 0) {
