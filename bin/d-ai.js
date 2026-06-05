@@ -172,6 +172,95 @@ function cmdRemove() {
   console.log()
 }
 
+function cmdUpdate() {
+  const target = args[0]
+  if (!target) {
+    err('Usage: d-ai update <skill-name>')
+    process.exit(1)
+  }
+
+  console.log(bold('\nd-ai update'))
+
+  // 1. Skill must be installed locally
+  const localSkill = path.join(SKILLS_DEST, target)
+  if (!fs.existsSync(localSkill)) {
+    err(`Skill "${target}" is not installed locally (looked in ${localSkill})`)
+    process.exit(1)
+  }
+
+  // 2. Ensure repo is cloned and up to date
+  ensureRepo()
+
+  // 3. Create a new branch
+  const branch = `update/${target}-${Date.now()}`
+  const gitBranch = run(`git checkout -b ${branch}`, CACHE_DIR)
+  if (gitBranch.status !== 0) {
+    err('Failed to create branch: ' + gitBranch.stderr.trim())
+    process.exit(1)
+  }
+  info(`Branch: ${branch}`)
+
+  // 4. Copy local skill into the repo
+  const destSkill = path.join(SKILLS_SRC, target)
+  fs.rmSync(destSkill, { recursive: true, force: true })
+  fs.cpSync(localSkill, destSkill, { recursive: true })
+  ok(`Copied ${localSkill}  →  ${destSkill}`)
+
+  // 5. Commit
+  run('git add -A', CACHE_DIR)
+  const commit = run(`git commit -m "update(${target}): sync local changes"`, CACHE_DIR)
+  if (commit.status !== 0) {
+    // Check if there's nothing to commit
+    if (commit.stdout.includes('nothing to commit')) {
+      warn('No changes detected — local skill is identical to the repo version.')
+      run('git checkout main', CACHE_DIR)
+      console.log()
+      return
+    }
+    err('Commit failed: ' + commit.stderr.trim())
+    run('git checkout main', CACHE_DIR)
+    process.exit(1)
+  }
+  ok('Changes committed')
+
+  // 6. Push branch
+  const push = run(`git push origin ${branch}`, CACHE_DIR)
+  if (push.status !== 0) {
+    err('Push failed: ' + push.stderr.trim())
+    run('git checkout main', CACHE_DIR)
+    process.exit(1)
+  }
+  ok(`Branch pushed: ${branch}`)
+
+  // 7. Create PR — prefer `gh` CLI, fall back to browser URL
+  const ghCheck = run('gh --version')
+  let prUrl = null
+
+  if (ghCheck.status === 0) {
+    const pr = run(
+      `gh pr create --repo MaistoMyletojai/ai-skills --base main --head ${branch} ` +
+      `--title "update(${target}): sync local changes" ` +
+      `--body "Local skill changes for \\`${target}\\` submitted via \\`d-ai update\\`."`,
+      CACHE_DIR
+    )
+    if (pr.status === 0) {
+      prUrl = pr.stdout.trim()
+      ok(`PR created: ${prUrl}`)
+    } else {
+      warn('gh pr create failed — open the URL below to create manually')
+    }
+  }
+
+  if (!prUrl) {
+    const fallbackUrl = `https://github.com/MaistoMyletojai/ai-skills/compare/main...${encodeURIComponent(branch)}?expand=1`
+    info(`Open to create PR: ${fallbackUrl}`)
+  }
+
+  // 8. Return to main in the cached repo
+  run('git checkout main', CACHE_DIR)
+  console.log()
+}
+
 function cmdList() {
   console.log(bold('\nd-ai list'))
   ensureRepo()
@@ -238,6 +327,7 @@ ${bold('COMMANDS')}
   install <skill>   Install a skill from the repo
   install -a        Install all skills from the repo
   sync              Pull latest and update already-installed skills
+  update <skill>    Push your local changes to a PR in the repo
   remove <skill>    Remove an installed skill
   list              Show all available skills in the repo
   status            Show installed skills (no network)
@@ -247,6 +337,7 @@ ${bold('EXAMPLES')}
   d-ai install qa-ticket    Install the qa-ticket skill
   d-ai install -a           Install every skill in the repo
   d-ai sync                 Update all currently installed skills
+  d-ai update qa-ticket     Open a PR with your local changes to qa-ticket
   d-ai remove qa-ticket     Uninstall a skill
   d-ai list                 Browse available skills
   d-ai status               Check what is installed
@@ -265,6 +356,7 @@ ${bold('REPO')}
 switch (command) {
   case 'install': cmdInstall(); break
   case 'sync':    cmdSync();    break
+  case 'update':  cmdUpdate();  break
   case 'remove':  cmdRemove();  break
   case 'list':    cmdList();    break
   case 'status':  cmdStatus();  break
