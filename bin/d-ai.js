@@ -119,16 +119,40 @@ function installGhHint() {
 }
 
 async function ensureGh() {
+  // Check if gh is installed — try both 'gh' and common install paths
   const version = run('gh --version')
-  if (version.status !== 0) {
-    installGhHint()
-    return false
+  const ghMissing = version.status !== 0 || version.error
+
+  if (ghMissing) {
+    console.log()
+    warn('gh CLI is not installed.')
+    if (IS_MAC) {
+      info('Install with:  brew install gh')
+      const doInstall = await confirm('Run `brew install gh` now?')
+      if (doInstall) {
+        const result = spawnSync('brew install gh', { shell: true, stdio: 'inherit' })
+        if (result.status !== 0) {
+          fail('Installation failed. Please install manually: brew install gh')
+          return false
+        }
+        ok('gh installed')
+      } else {
+        return false
+      }
+    } else if (IS_WINDOWS) {
+      info('Install with:  winget install GitHub.cli')
+      info('Or download:   https://cli.github.com')
+      return false
+    } else {
+      info('Install:  https://cli.github.com/manual/installation')
+      return false
+    }
   }
 
   const auth = run('gh auth status')
   if (auth.status !== 0) {
     console.log()
-    warn('You are not logged in to GitHub.')
+    warn('Not logged in to GitHub.')
     info('Run:  gh auth login')
     console.log()
     const doLogin = await confirm('Run `gh auth login` now?')
@@ -478,8 +502,11 @@ ${bold('REPO')}
     case '-h':
     case undefined: cmdHelp(); break
     default:
-      fail(`Unknown command: ${command}`)
+      fail('Unknown command: ' + command)
       console.log('  Run `d-ai help` for usage.\n')
       process.exit(1)
   }
-})()
+})().catch(e => {
+  fail('Unexpected error: ' + (e && e.message ? e.message : String(e)))
+  process.exit(1)
+})
