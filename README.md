@@ -11,9 +11,10 @@ npm install -g https://github.com/MaistoMyletojai/ai-skills.git
 ## Commands
 
 ```bash
-d-ai install <skill>   # install a skill
-d-ai install -a        # install all skills
+d-ai install <skill>   # install a skill from the repo
+d-ai install -a        # install all skills from the repo
 d-ai sync              # pull latest and update already-installed skills
+d-ai update <skill>    # push your local changes to a PR in the repo
 d-ai remove <skill>    # uninstall a skill
 d-ai list              # browse available skills in the repo
 d-ai status            # check what is installed locally (no network)
@@ -31,6 +32,7 @@ npm install -g https://github.com/MaistoMyletojai/ai-skills.git
 - Skills are installed to `~/.claude/skills/` — Claude Code's global skill directory
 - The repo is cached at `~/.d-ai/repo/`
 - `sync` only updates skills you have already installed — it won't install new ones automatically
+- `update` takes your locally modified skill, creates a branch, and opens a PR — requires `gh` CLI for automatic PR creation, otherwise prints a browser URL
 - Restart Claude Code after installing or syncing to pick up changes
 
 ## Available skills
