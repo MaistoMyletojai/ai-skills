@@ -150,7 +150,13 @@ async function ensureGh() {
 
 // ─── Repo helpers ─────────────────────────────────────────────────────────────
 
-function ensureRepo() {
+async function ensureRepo() {
+  const ghReady = await ensureGh()
+  if (!ghReady) {
+    fail('GitHub access is required. Please set up the gh CLI and try again.')
+    process.exit(1)
+  }
+
   fs.mkdirSync(path.dirname(CACHE_DIR), { recursive: true })
   if (!fs.existsSync(CACHE_DIR)) {
     info(`Cloning ${REPO_URL} ...`)
@@ -217,7 +223,7 @@ async function cmdInstall() {
   }
 
   console.log(bold('\nd-ai install'))
-  ensureRepo()
+  await ensureRepo()
 
   const available = availableSkills()
   const dest = await resolveSkillsDest()
@@ -243,7 +249,7 @@ async function cmdInstall() {
 
 async function cmdSync() {
   console.log(bold('\nd-ai sync'))
-  ensureRepo()
+  await ensureRepo()
 
   const dest      = await resolveSkillsDest()
   const installed = installedSkills(dest)
@@ -280,13 +286,6 @@ async function cmdUpdate() {
 
   console.log(bold('\nd-ai update'))
 
-  // Check gh first — needed to create a PR
-  const ghReady = await ensureGh()
-  if (!ghReady) {
-    fail('GitHub CLI (gh) is required for d-ai update.')
-    process.exit(1)
-  }
-
   // Locate local skill
   const dest       = await resolveSkillsDest()
   const localSkill = path.join(dest, target)
@@ -295,7 +294,7 @@ async function cmdUpdate() {
     process.exit(1)
   }
 
-  ensureRepo()
+  await ensureRepo()
 
   const branch = `update/${target}-${Date.now()}`
   const gitBranch = run(`git checkout -b ${branch}`, CACHE_DIR)
@@ -373,7 +372,7 @@ async function cmdRemove() {
 
 async function cmdList() {
   console.log(bold('\nd-ai list'))
-  ensureRepo()
+  await ensureRepo()
 
   const available = availableSkills()
   if (available.length === 0) { info('No skills in repository yet'); return }
