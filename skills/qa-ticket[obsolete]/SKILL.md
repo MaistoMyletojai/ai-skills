@@ -1,5 +1,5 @@
 ---
-name: qa-ticket
+name: qa-ticket[obsolete]
 description: >
   Fully automated QA validation for a Trello ticket. Fetches acceptance criteria,
   finds the associated PR(s) in self-service-web and/or dserve-backend, builds
