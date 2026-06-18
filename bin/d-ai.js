@@ -47,10 +47,15 @@ function run(cmd, cwd) {
 
 // ─── .claude location ────────────────────────────────────────────────────────
 
-// Candidate locations, ordered by preference
+// Candidate locations, ordered by preference. d-ai operates on every
+// existing one — Claude Code (~/.claude) and the Claude Agent SDK
+// (~/claude-agent/.claude) can both be installed side-by-side.
 function claudeCandidates() {
   const home = os.homedir()
-  const candidates = [path.join(home, '.claude')]
+  const candidates = [
+    path.join(home, '.claude'),
+    path.join(home, 'claude-agent', '.claude'),
+  ]
 
   // Windows: also check AppData\Local\Claude and AppData\Roaming\Claude
   if (IS_WINDOWS) {
@@ -63,28 +68,16 @@ function claudeCandidates() {
   return candidates
 }
 
-async function resolveSkillsDest() {
+// All existing `.claude/skills` paths to operate on. If none exist, prompt
+// the user to create one.
+async function resolveSkillsDests() {
   const candidates = claudeCandidates()
   const existing   = candidates.filter(p => fs.existsSync(p))
 
-  if (existing.length === 1) {
-    return path.join(existing[0], 'skills')
+  if (existing.length > 0) {
+    return existing.map(p => path.join(p, 'skills'))
   }
 
-  if (existing.length > 1) {
-    console.log()
-    warn('Found multiple .claude directories:')
-    existing.forEach((p, i) => console.log(`    ${i + 1}) ${p}`))
-    const choice = await ask('Which one to use? (enter number)')
-    const idx = parseInt(choice, 10) - 1
-    if (isNaN(idx) || idx < 0 || idx >= existing.length) {
-      fail('Invalid choice.')
-      process.exit(1)
-    }
-    return path.join(existing[idx], 'skills')
-  }
-
-  // None found — ask user
   console.log()
   warn(`.claude directory not found in default location(s):`)
   candidates.forEach(p => console.log(dim(`    ${p}`)))
@@ -92,9 +85,10 @@ async function resolveSkillsDest() {
   const defaultPath = candidates[0]
   const useDefault  = await confirm(`Create it at ${defaultPath}?`)
   if (useDefault) {
-    fs.mkdirSync(path.join(defaultPath, 'skills'), { recursive: true })
+    const dest = path.join(defaultPath, 'skills')
+    fs.mkdirSync(dest, { recursive: true })
     ok(`Created ${defaultPath}`)
-    return path.join(defaultPath, 'skills')
+    return [dest]
   }
 
   const custom = await ask('Enter the full path to your .claude directory')
@@ -103,8 +97,33 @@ async function resolveSkillsDest() {
     process.exit(1)
   }
   const resolved = path.resolve(custom)
-  fs.mkdirSync(path.join(resolved, 'skills'), { recursive: true })
-  return path.join(resolved, 'skills')
+  const dest = path.join(resolved, 'skills')
+  fs.mkdirSync(dest, { recursive: true })
+  return [dest]
+}
+
+// For commands that read a single local skill (d-ai update). If the skill
+// exists in multiple locations, prompt the user to pick one.
+async function resolveSkillSource(target) {
+  const dests = await resolveSkillsDests()
+  const containing = dests.filter(d => {
+    const p = path.join(d, target)
+    return fs.existsSync(p) && fs.statSync(p).isDirectory()
+  })
+
+  if (containing.length === 0) return null
+  if (containing.length === 1) return path.join(containing[0], target)
+
+  console.log()
+  warn(`Skill "${target}" found in multiple locations:`)
+  containing.forEach((p, i) => console.log(`    ${i + 1}) ${p}`))
+  const choice = await ask('Which one to use? (enter number)')
+  const idx = parseInt(choice, 10) - 1
+  if (isNaN(idx) || idx < 0 || idx >= containing.length) {
+    fail('Invalid choice.')
+    process.exit(1)
+  }
+  return path.join(containing[idx], target)
 }
 
 // ─── gh CLI checks ───────────────────────────────────────────────────────────
@@ -250,16 +269,18 @@ async function cmdInstall() {
   await ensureRepo()
 
   const available = availableSkills()
-  const dest = await resolveSkillsDest()
-  fs.mkdirSync(dest, { recursive: true })
+  const dests = await resolveSkillsDests()
+  for (const d of dests) fs.mkdirSync(d, { recursive: true })
 
   if (installAll) {
     if (available.length === 0) { warn('No skills in repository.'); return }
     for (const name of available) {
-      copySkill(name, dest)
+      for (const d of dests) copySkill(name, d)
       ok(name)
     }
-    console.log(`\n  ${available.length} skill(s) installed to ${dest}\n`)
+    console.log(`\n  ${available.length} skill(s) installed to:`)
+    for (const d of dests) console.log(`    ${d}`)
+    console.log()
     return
   }
 
@@ -270,8 +291,10 @@ async function cmdInstall() {
     process.exit(1)
   }
 
-  copySkill(target, dest)
-  ok(`${target}  →  ${dest}${path.sep}${target}`)
+  for (const d of dests) {
+    copySkill(target, d)
+    ok(`${target}  →  ${d}${path.sep}${target}`)
+  }
   console.log(`\n  Restart Claude Code to pick up the new skill.\n`)
 }
 
@@ -342,30 +365,44 @@ async function cmdSync() {
   console.log(bold('\nd-ai sync'))
   await ensureRepo()
 
-  const dest      = await resolveSkillsDest()
-  const installed = installedSkills(dest)
+  const dests     = await resolveSkillsDests()
   const available = availableSkills()
-  const toUpdate  = installed.filter(n => available.includes(n))
-  const missing   = installed.filter(n => !available.includes(n))
+  let updatedCount = 0
+  const missingByDest = []
 
-  if (toUpdate.length === 0) {
-    info('No installed skills to update.')
+  for (const dest of dests) {
+    const installed = installedSkills(dest)
+    const toUpdate  = installed.filter(n => available.includes(n))
+    const missing   = installed.filter(n => !available.includes(n))
+
+    if (toUpdate.length === 0) {
+      info(`No installed skills to update in ${dest}`)
+      continue
+    }
+
+    console.log()
+    info(dest)
+    for (const name of toUpdate) {
+      copySkill(name, dest)
+      ok(`${name}  updated`)
+      updatedCount++
+    }
+    if (missing.length > 0) missingByDest.push({ dest, missing })
+  }
+
+  for (const { dest, missing } of missingByDest) {
+    console.log()
+    info(`Local-only in ${dest} (not in repo, skipped):`)
+    for (const name of missing) warn(`  ${name}`)
+  }
+
+  if (updatedCount === 0) {
     info('Use `d-ai install <skill>` to install a skill first.')
     console.log()
     return
   }
 
-  for (const name of toUpdate) {
-    copySkill(name, dest)
-    ok(`${name}  updated`)
-  }
-
-  if (missing.length > 0) {
-    console.log()
-    for (const name of missing) warn(`${name}  (local only — not in repo, skipped)`)
-  }
-
-  console.log(`\n  ${toUpdate.length} skill(s) updated. Restart Claude Code to pick up changes.\n`)
+  console.log(`\n  ${updatedCount} skill(s) updated. Restart Claude Code to pick up changes.\n`)
 }
 
 async function cmdUpdate() {
@@ -377,10 +414,11 @@ async function cmdUpdate() {
 
   console.log(bold('\nd-ai update'))
 
-  const dest       = await resolveSkillsDest()
-  const localSkill = path.join(dest, target)
-  if (!fs.existsSync(localSkill)) {
-    fail(`Skill "${target}" is not installed locally (looked in ${localSkill})`)
+  const localSkill = await resolveSkillSource(target)
+  if (!localSkill) {
+    const dests = await resolveSkillsDests()
+    fail(`Skill "${target}" is not installed locally. Checked:`)
+    for (const d of dests) console.log(dim(`    ${path.join(d, target)}`))
     process.exit(1)
   }
 
@@ -399,15 +437,20 @@ async function cmdRemove() {
 
   console.log(bold('\nd-ai remove'))
 
-  const dest = await resolveSkillsDest()
-  const to   = path.join(dest, target)
-  if (!fs.existsSync(to)) {
+  const dests   = await resolveSkillsDests()
+  const removed = []
+  for (const dest of dests) {
+    const to = path.join(dest, target)
+    if (fs.existsSync(to)) {
+      fs.rmSync(to, { recursive: true, force: true })
+      ok(`${target}  removed from ${dest}`)
+      removed.push(dest)
+    }
+  }
+  if (removed.length === 0) {
     fail(`Skill "${target}" is not installed.`)
     process.exit(1)
   }
-
-  fs.rmSync(to, { recursive: true, force: true })
-  ok(`${target}  removed from ${dest}`)
   console.log()
 }
 
@@ -418,13 +461,13 @@ async function cmdList() {
   const available = availableSkills()
   if (available.length === 0) { info('No skills in repository yet'); return }
 
-  const dest      = await resolveSkillsDest()
-  const installed = installedSkills(dest)
+  const dests        = await resolveSkillsDests()
+  const installedSet = new Set(dests.flatMap(d => installedSkills(d)))
 
   console.log()
   for (const name of available) {
     const desc = skillDesc(name)
-    const tag  = installed.includes(name)
+    const tag  = installedSet.has(name)
       ? '\x1b[32m[installed]\x1b[0m'
       : '\x1b[90m[not installed]\x1b[0m'
     console.log(`  ${bold(name.padEnd(20))} ${tag}${desc ? '  ' + dim(desc) : ''}`)
@@ -435,14 +478,15 @@ async function cmdList() {
 async function cmdStatus() {
   console.log(bold('\nd-ai status'))
 
-  const dest      = await resolveSkillsDest()
-  const installed = installedSkills(dest)
+  const dests        = await resolveSkillsDests()
+  const perDest      = dests.map(d => ({ dest: d, installed: installedSkills(d) }))
+  const installedSet = new Set(perDest.flatMap(p => p.installed))
 
   if (!fs.existsSync(CACHE_DIR)) {
     info('Remote repo not cached — run `d-ai list` or `d-ai sync` first')
-    if (installed.length > 0) {
+    if (installedSet.size > 0) {
       console.log()
-      for (const name of installed) console.log(`  ${name}  \x1b[32m[installed]\x1b[0m`)
+      for (const name of installedSet) console.log(`  ${name}  \x1b[32m[installed]\x1b[0m`)
     }
     console.log()
     return
@@ -451,20 +495,26 @@ async function cmdStatus() {
   const available = availableSkills()
   console.log()
   console.log(`  Platform  : ${IS_MAC ? 'macOS' : IS_WINDOWS ? 'Windows' : 'Linux'}`)
-  console.log(`  .claude   : ${path.dirname(dest)}`)
+  console.log(`  .claude   :`)
+  for (const { dest, installed } of perDest) {
+    console.log(`    ${path.dirname(dest)}  ${dim(`(${installed.length} skill(s))`)}`)
+  }
   console.log(`  Remote    : ${available.length} skill(s)`)
-  console.log(`  Installed : ${installed.length} skill(s)`)
+  console.log(`  Installed : ${installedSet.size} unique skill(s)`)
   console.log()
 
   for (const name of available) {
-    const tag = installed.includes(name)
-      ? '\x1b[32m✓ installed\x1b[0m'
+    const where = perDest.filter(p => p.installed.includes(name)).map(p => path.dirname(p.dest))
+    const tag = where.length > 0
+      ? `\x1b[32m✓ installed\x1b[0m  ${dim(where.join(', '))}`
       : '\x1b[90m· not installed\x1b[0m'
     console.log(`  ${name.padEnd(24)} ${tag}`)
   }
 
-  for (const name of installed.filter(n => !available.includes(n))) {
-    console.log(`  ${name.padEnd(24)} \x1b[90m· local only\x1b[0m`)
+  for (const name of installedSet) {
+    if (available.includes(name)) continue
+    const where = perDest.filter(p => p.installed.includes(name)).map(p => path.dirname(p.dest))
+    console.log(`  ${name.padEnd(24)} \x1b[90m· local only\x1b[0m  ${dim(where.join(', '))}`)
   }
   console.log()
 }
