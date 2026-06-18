@@ -260,15 +260,82 @@ async function cmdInstall() {
       ok(name)
     }
     console.log(`\n  ${available.length} skill(s) installed to ${dest}\n`)
-  } else {
-    if (!available.includes(target)) {
-      fail(`Skill "${target}" not found. Available: ${available.join(', ')}`)
-      process.exit(1)
-    }
-    copySkill(target, dest)
-    ok(`${target}  →  ${dest}${path.sep}${target}`)
-    console.log(`\n  Restart Claude Code to pick up the new skill.\n`)
+    return
   }
+
+  if (!available.includes(target)) {
+    fail(`Skill "${target}" not found in repo.`)
+    if (available.length > 0) info(`Available: ${available.join(', ')}`)
+    info('To publish a local skill to the repo, run: d-ai update ' + target)
+    process.exit(1)
+  }
+
+  copySkill(target, dest)
+  ok(`${target}  →  ${dest}${path.sep}${target}`)
+  console.log(`\n  Restart Claude Code to pick up the new skill.\n`)
+}
+
+async function publishSkill(target, localSkill, { isNew }) {
+  const action = isNew ? 'add' : 'update'
+  const branch = `${action}/${target}-${Date.now()}`
+
+  const gitBranch = run(`git checkout -b ${branch}`, CACHE_DIR)
+  if (gitBranch.status !== 0) {
+    fail('Failed to create branch: ' + gitBranch.stderr.trim())
+    process.exit(1)
+  }
+  info(`Branch: ${branch}`)
+
+  const destSkill = path.join(SKILLS_SRC, target)
+  fs.rmSync(destSkill, { recursive: true, force: true })
+  fs.cpSync(localSkill, destSkill, { recursive: true })
+  ok(`Copied ${localSkill}  →  ${destSkill}`)
+
+  run('git add -A', CACHE_DIR)
+  const commitMsg = isNew
+    ? `add(${target}): new skill`
+    : `update(${target}): sync local changes`
+  const commit = run(`git commit -m "${commitMsg}"`, CACHE_DIR)
+  if (commit.status !== 0) {
+    if (commit.stdout.includes('nothing to commit') || commit.stderr.includes('nothing to commit')) {
+      warn('No changes detected — local skill is identical to the repo version.')
+      run('git checkout main', CACHE_DIR)
+      console.log()
+      return
+    }
+    fail('Commit failed: ' + commit.stderr.trim())
+    run('git checkout main', CACHE_DIR)
+    process.exit(1)
+  }
+  ok('Changes committed')
+
+  const push = run(`git push origin ${branch}`, CACHE_DIR)
+  if (push.status !== 0) {
+    fail('Push failed: ' + push.stderr.trim())
+    run('git checkout main', CACHE_DIR)
+    process.exit(1)
+  }
+  ok(`Branch pushed: ${branch}`)
+
+  const prTitle = isNew
+    ? 'add(' + target + '): new skill'
+    : 'update(' + target + '): sync local changes'
+  const prBody = isNew
+    ? 'New skill `' + target + '` submitted via `d-ai install`.'
+    : 'Local skill changes for `' + target + '` submitted via `d-ai update`.'
+  const pr = run(
+    'gh pr create --repo MaistoMyletojai/ai-skills --base main --head "' + branch + '" --title "' + prTitle + '" --body "' + prBody + '"',
+    CACHE_DIR
+  )
+  if (pr.status === 0) {
+    ok(`PR created: ${pr.stdout.trim()}`)
+  } else {
+    warn('PR creation failed. Open this URL to create manually:')
+    info(`https://github.com/MaistoMyletojai/ai-skills/compare/main...${encodeURIComponent(branch)}?expand=1`)
+  }
+
+  run('git checkout main', CACHE_DIR)
+  console.log()
 }
 
 async function cmdSync() {
@@ -310,7 +377,6 @@ async function cmdUpdate() {
 
   console.log(bold('\nd-ai update'))
 
-  // Locate local skill
   const dest       = await resolveSkillsDest()
   const localSkill = path.join(dest, target)
   if (!fs.existsSync(localSkill)) {
@@ -320,57 +386,8 @@ async function cmdUpdate() {
 
   await ensureRepo()
 
-  const branch = `update/${target}-${Date.now()}`
-  const gitBranch = run(`git checkout -b ${branch}`, CACHE_DIR)
-  if (gitBranch.status !== 0) {
-    fail('Failed to create branch: ' + gitBranch.stderr.trim())
-    process.exit(1)
-  }
-  info(`Branch: ${branch}`)
-
-  const destSkill = path.join(SKILLS_SRC, target)
-  fs.rmSync(destSkill, { recursive: true, force: true })
-  fs.cpSync(localSkill, destSkill, { recursive: true })
-  ok(`Copied ${localSkill}  →  ${destSkill}`)
-
-  run('git add -A', CACHE_DIR)
-  const commit = run(`git commit -m "update(${target}): sync local changes"`, CACHE_DIR)
-  if (commit.status !== 0) {
-    if (commit.stdout.includes('nothing to commit') || commit.stderr.includes('nothing to commit')) {
-      warn('No changes detected — local skill is identical to the repo version.')
-      run('git checkout main', CACHE_DIR)
-      console.log()
-      return
-    }
-    fail('Commit failed: ' + commit.stderr.trim())
-    run('git checkout main', CACHE_DIR)
-    process.exit(1)
-  }
-  ok('Changes committed')
-
-  const push = run(`git push origin ${branch}`, CACHE_DIR)
-  if (push.status !== 0) {
-    fail('Push failed: ' + push.stderr.trim())
-    run('git checkout main', CACHE_DIR)
-    process.exit(1)
-  }
-  ok(`Branch pushed: ${branch}`)
-
-  const prTitle = 'update(' + target + '): sync local changes'
-  const prBody  = 'Local skill changes for `' + target + '` submitted via `d-ai update`.'
-  const pr = run(
-    'gh pr create --repo MaistoMyletojai/ai-skills --base main --head "' + branch + '" --title "' + prTitle + '" --body "' + prBody + '"',
-    CACHE_DIR
-  )
-  if (pr.status === 0) {
-    ok(`PR created: ${pr.stdout.trim()}`)
-  } else {
-    warn('PR creation failed. Open this URL to create manually:')
-    info(`https://github.com/MaistoMyletojai/ai-skills/compare/main...${encodeURIComponent(branch)}?expand=1`)
-  }
-
-  run('git checkout main', CACHE_DIR)
-  console.log()
+  const isNew = !availableSkills().includes(target)
+  await publishSkill(target, localSkill, { isNew })
 }
 
 async function cmdRemove() {
@@ -460,20 +477,22 @@ ${bold('USAGE')}
   d-ai <command> [options]
 
 ${bold('COMMANDS')}
-  install <skill>   Install a skill from the repo
+  install <skill>   Install a skill from the repo into .claude/skills/
   install -a        Install all skills from the repo
   sync              Pull latest and update already-installed skills
-  update <skill>    Push your local changes to a PR in the repo
+  update <skill>    Push your local skill to the repo via PR. If the skill
+                    already exists in the repo, opens an update PR;
+                    otherwise opens a PR to add it as a new skill.
   remove <skill>    Remove an installed skill
   list              Show all available skills in the repo
   status            Show installed skills and environment info
   help              Show this help
 
 ${bold('EXAMPLES')}
-  d-ai install qa-ticket    Install the qa-ticket skill
+  d-ai install qa-ticket    Install the qa-ticket skill from the repo
   d-ai install -a           Install every skill in the repo
   d-ai sync                 Update all currently installed skills
-  d-ai update qa-ticket     Open a PR with your local changes to qa-ticket
+  d-ai update qa-ticket     Open a PR with your local qa-ticket (add or update)
   d-ai remove qa-ticket     Uninstall a skill
   d-ai list                 Browse available skills
   d-ai status               Check what is installed
