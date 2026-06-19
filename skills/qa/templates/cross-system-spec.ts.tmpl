@@ -1,0 +1,96 @@
+// cross-system-spec.ts.tmpl — Playwright template for verifying that
+// changes made in Dserve.Admin propagate to the self-service-web eshop
+// (or vice versa). Uses TWO browser contexts in a single test:
+//   • adminCtx — uses storageState (already logged-in)
+//   • eshopCtx — fresh context with tabletToken query-param auth
+//
+// Required env (set by cross-system-tier.sh):
+//   QA_ADMIN_URL          — e.g. http://localhost:5080
+//   QA_ADMIN_STATE_FILE   — path to saved Admin auth state
+//   QA_ESHOP_URL          — e.g. http://localhost:5173
+//   QA_TABLET_TOKEN       — JWT from keychain (autodev_qa_tablet_token)
+//   QA_SCREENSHOT_DIR     — where shotWithHighlight writes
+//
+// Cross-system invariants:
+//   • Always screenshot BOTH sides — Admin before-after, eshop after.
+//   • Allow a brief settle for eshop to refetch /api/qr/menu after
+//     the Admin save (default 3s; tune per AC if the eshop has a
+//     longer cache).
+//   • If the Admin save fails, abort the test with a clear message —
+//     don't waste time verifying eshop propagation of a no-op.
+
+import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { promises as fs } from "fs";
+import * as path from "path";
+
+const ADMIN_URL   = process.env.QA_ADMIN_URL!;
+const ADMIN_STATE = process.env.QA_ADMIN_STATE_FILE!;
+const ESHOP_URL   = process.env.QA_ESHOP_URL!;
+const TABLET_TOKEN = process.env.QA_TABLET_TOKEN!;
+const SHOT_DIR    = process.env.QA_SCREENSHOT_DIR!;
+
+async function shotWithHighlight(
+  page: Page, file: string, selector?: string
+): Promise<void> {
+  if (selector) {
+    try {
+      await page.locator(selector).first().evaluate(
+        (el: HTMLElement) => { el.style.outline = "3px solid #ff3366"; el.style.outlineOffset = "2px"; }
+      );
+    } catch { /* selector miss — still take the shot */ }
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await page.screenshot({ path: file, fullPage: true });
+}
+
+async function openEshop(ctx: BrowserContext): Promise<Page> {
+  const p = await ctx.newPage();
+  await p.goto(`${ESHOP_URL}/?tabletToken=${TABLET_TOKEN}`);
+  // Wait for the first /api/qr/menu fetch to complete
+  await p.waitForResponse(
+    r => r.url().includes("/api/qr/menu") && r.status() === 200,
+    { timeout: 15000 }
+  ).catch(() => { /* some flows preload — don't hard-fail */ });
+  await p.waitForLoadState("networkidle");
+  return p;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// EXAMPLE — replace AC body with what the actual ticket calls for.
+// ──────────────────────────────────────────────────────────────────
+
+test("AC1: product title change in Admin appears in eshop menu", async ({ browser }) => {
+  // 1. Admin side — change title
+  const adminCtx = await browser.newContext({ storageState: ADMIN_STATE });
+  const admin = await adminCtx.newPage();
+  await admin.goto(`${ADMIN_URL}/products`);
+  // (assume first product row for the template — real spec selects by id/name)
+  await admin.locator('table tbody tr').first().locator('a, button:has-text("Edit")').first().click();
+
+  const nameInput = admin.locator('input[name="ProductName"], input[name="Name"]').first();
+  const newName = `QA-Test-${Date.now()}`;
+  await nameInput.fill(newName);
+  await shotWithHighlight(admin, `${SHOT_DIR}/ac-1-admin-before-save.png`, 'input[name="ProductName"], input[name="Name"]');
+
+  const saveResp = admin.waitForResponse(r => /\/api\/products/i.test(r.url()) && r.request().method() !== "GET");
+  await admin.locator('button:has-text("Save"), button[type="submit"]').first().click();
+  const resp = await saveResp;
+  expect(resp.status(), `Admin save returned ${resp.status()} — aborting cross-system check`).toBeLessThan(400);
+  await shotWithHighlight(admin, `${SHOT_DIR}/ac-1-admin-after-save.png`);
+
+  // 2. Eshop side — verify propagation
+  const eshopCtx = await browser.newContext();
+  const eshop = await openEshop(eshopCtx);
+
+  // Give the eshop a moment to re-fetch (CDN/cache, debounced refresh, etc.)
+  await eshop.waitForTimeout(3000);
+  await eshop.reload();
+  await eshop.waitForLoadState("networkidle");
+
+  const eshopItem = eshop.locator(`text="${newName}"`).first();
+  await expect(eshopItem, `eshop did not show new title "${newName}" within 10s`).toBeVisible({ timeout: 10000 });
+  await shotWithHighlight(eshop, `${SHOT_DIR}/ac-1-eshop-after.png`, `text="${newName}"`);
+
+  await adminCtx.close();
+  await eshopCtx.close();
+});
