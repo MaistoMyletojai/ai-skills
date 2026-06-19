@@ -1,0 +1,14 @@
+# Secrets — NEVER commit. Only the .example template is tracked.
+config/.secrets
+**/.secrets
+*.secret
+
+# Local run artifacts (the skill writes runtime data OUTSIDE the repo, under
+# $QA_DATA_ROOT, but guard against accidental in-tree output too).
+runs/
+screenshots/
+*-results.json
+*-state.json
+__pycache__/
+*.pyc
+.DS_Store
