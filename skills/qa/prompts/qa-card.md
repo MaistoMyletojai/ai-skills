@@ -686,7 +686,19 @@ The final stdout line must still be one of:
 
 ## 8. Write outputs
 
-You write TWO report files. They target different readers:
+You write THREE report files. They target different readers:
+
+1. `qa-report.md` — full technical report → **GitHub PR comment**.
+2. `qa-summary-dev.md` — DEVELOPER (technical) summary → **Trello comment #1**.
+3. `qa-summary-qa.md` — QA-PERSON (UI/UX) summary → **Trello comment #2**.
+
+`qa_post.py` posts the two summaries as **two separate Trello comments** (dev
+first, then qa), each with its own audience header. The split exists because
+the two readers want opposite things: the developer wants build/API/migration/
+code detail; the manual QA tester wants plain-language UI behaviour + exact
+click-through steps and does **not** care about build errors or code internals.
+Write BOTH. (A legacy single `qa-trello-summary.md` is still honoured as a
+fallback — see the bottom of this section.)
 
 ### `$QA_OUT_DIR/qa-report.md` — full report (goes to GitHub PR comment)
 
@@ -725,75 +737,115 @@ test framework details, recommendations, build/run logs.
 the validation regression in ac-2.">
 ```
 
-### `$QA_OUT_DIR/qa-trello-summary.md` — short report (goes to Trello card)
+### `$QA_OUT_DIR/qa-summary-dev.md` — DEVELOPER summary (Trello comment #1)
 
-Trello readers are QA (Giedrė) + PMs + the broader team — they need
-status at a glance and actionable manual steps. They do NOT need code
-citations, test framework details, or recommendations. Target length:
-under 2000 characters. Hard cap: 4000 characters.
+Audience: **the developer** who must merge / deploy this PR. They want the
+technical truth, on the card, without opening GitHub. `qa_post.py` prefixes
+this comment with `👨‍💻 **QA #<ticket> — Developer summary**`.
 
-REQUIRED sections, in this order. **Use bullet lists, NOT markdown
-tables** — Trello comments do not render markdown tables and the AC
-results will look empty.
+What it MUST contain:
+- **Verdict + one-line why** (the single reason behind the verdict).
+- **Full-solution / build result** — did the solution compile? Any compile
+  errors or warnings (with the offending `file:line`).
+- **API / xUnit results** — `<passed>/<total>`, names of any failing tests.
+- **Code-level findings** — concrete issues with `file:line` citations.
+- **Migration / schema concerns** + any `HIGH_RISK` gates
+  (auth / payment / fiscal / register / migrations).
+- **Architecture notes** — anything structural the dev should know.
+- **Per-AC technical evidence** — test names, `file:line`, tier.
+- **What the dev must fix or verify before merge/deploy** — an explicit
+  action list.
 
 ```markdown
-🧪 **QA #<ticket>** — <short ticket title>
+**Verdict:** ✅⚠ QA_APPROVED_WITH_GATES — API + UI pass; one migration gate
+**Build:** solution compiles, 0 errors, 2 warnings (CS0168 in Foo.cs:42)
+**API tier:** 4/4 passing — `QaScratch.T4621.AC1_Foo.Bar_ReturnsOk` (210ms)
 
-**Verdict:** ✅ QA_APPROVED  (or one of the four)
-**PR:** <pr_url>
-<HIGH_RISK line if applicable, one short line>
+**Per-AC**
+- **ac-1:** ✅ PASS · api · `AC1_Foo.Bar_ReturnsOk`
+- **ac-2:** ✅ PASS · admin-ui · `ac-2-color.spec.ts` · ColorController.cs:88
+- **ac-3:** ⚠ NEEDS_HUMAN · migration adds non-null column — needs backfill
 
-## Acceptance Criteria
+**HIGH_RISK:** migration `20240617_AddX` adds a NOT NULL column with no default.
 
-- **ac-1:** <AC text, trimmed to ~80 chars> — ✅ PASS
-- **ac-2:** <AC text trimmed> — ⚠ PARTIAL_PASS — <one-line reason>
-- **ac-3:** <AC text trimmed> — 🟧 AC_DRIFT — <one-line reason>
-
-## Manual gate (for Giedrė)
-
-1. <specific step with exact UI label / serial number / dialog title>
-2. <next step>
-3. <…up to ~6 steps; if there are more, link to full report>
-
-📎 Screenshots of the verified UI (element under test highlighted in red)
-are attached to this card.
-📋 Full report on GitHub PR: <pr_url>
+**Before merge/deploy**
+1. Add a default or backfill for the new column in `20240617_AddX`.
+2. Re-run the API tier after the migration fix.
 ```
 
-(Include the 📎 screenshots line ONLY when the UI tier actually ran and
-produced screenshots. Omit it for API-only or code-evidence-only runs.)
+### `$QA_OUT_DIR/qa-summary-qa.md` — QA-PERSON summary (Trello comment #2)
 
-RULES for the Trello summary:
+Audience: **a manual tester / UX reviewer** (Giedrė). Plain language, **UI/UX
+only**. They verify behaviour by clicking the real UI — they do not read code.
+`qa_post.py` prefixes this comment with `🧪 **QA #<ticket> — QA / UX summary**`.
 
-- **Use bullet lists, NOT tables.** Trello renders bullets, bold,
-  italic, links, headers, inline code, fenced code blocks, and ordered
-  lists — but **not markdown tables**. A table in the body shows up as
-  one squashed line of pipes or gets stripped to near-blank. If you
-  reach for `|...|...|`, stop and use `- **label:** value` instead.
+What it MUST contain:
+- **Verdict in user terms** ("Works as described, with one thing to check by
+  hand" — not "QA_APPROVED_WITH_GATES, 1 PARTIAL_PASS").
+- **Per-UI-AC functional + visual bullets** — "the X button works", "the Y
+  screen renders correctly", "upload / save / remove works", and any **visual
+  defect** you saw in the screenshot.
+- A **`Screenshots:`** line (the verified UI is attached to this card, element
+  under test outlined in red).
+- **Manual click-through steps** — concrete navigation + the expected result,
+  so the tester can confirm on the real UI. Especially for gates that need
+  human eyes.
+
+What it MUST **NOT** contain (the QA person does not care):
+- build errors / "0 errors" / compile warnings
+- migrations / schema / DB internals
+- code internals, `file:line`, test names, architecture
+
+```markdown
+**Verdict:** ✅ Works as described — one thing to eyeball by hand.
+
+**What I checked**
+- The "Save" button works — settings persist after a reload. ✅
+- The colour picker on the Branding screen renders correctly, no clipping. ✅
+- Image upload + remove on the product screen both work. ✅
+- Minor: the "Branch ID" input looks a touch narrower than the field beside
+  it — worth a glance, not blocking.
+
+Screenshots: attached to this card (the checked element is outlined in red).
+
+**Please verify by hand**
+1. Open Admin → Settings → Branding, change the accent colour, hit Save.
+2. Reload the page — the new colour should still be there.
+3. On a phone-sized window, confirm the language button isn't cut off.
+```
+
+### Shared RULES for both Trello summaries
+
+- **Use bullet lists, NOT tables.** Trello renders bullets, bold, italic,
+  links, headers, inline code, fenced code blocks, and ordered lists — but
+  **not markdown tables**. A table shows up as one squashed line of pipes or
+  gets stripped to near-blank. If you reach for `|...|...|`, stop and use
+  `- **label:** value` instead.
+- **Target <2000 characters each.** Hard cap 4000. (`qa_post.py` truncates at
+  Trello's 16k limit per comment, but keep each well under 2000.)
 - **Trim AC text** to ~80 chars per line if longer (use `…` truncation).
-- **Evidence collapses** into the result line — one short reason
-  (≤80 chars), no file:line, no test names.
-- **Skip these sections entirely** vs. the full report:
-  - "Test Run Summary" (counts)
-  - "Issues found" (detailed list)
-  - "Recommendations" (prose)
-  - Diff size / branch name (metadata noise)
-- **Keep Manual gate verbatim** from the full report — these are the
-  high-value action items, the whole point of the Trello comment.
-- **Always end with the PR URL** so anyone can click through to the
-  full detailed report on GitHub.
-- **Minimum length: 200 characters.** Even for a trivial diff, the
-  summary must include verdict + at least one bullet per AC + the PR
-  link. If you finish with under 200 chars, you've under-written it.
-- If the verdict is `QA_APPROVED` and no manual steps are needed, the
-  Trello summary can be ~300-500 chars — that's fine, shorter is
-  better. But never zero.
+- **Minimum length: 200 characters each.** Even a trivial diff gets verdict +
+  at least one bullet per AC. Never zero.
+- Include the `Screenshots:` line in the **QA** summary ONLY when the UI tier
+  actually ran and produced screenshots — omit it for API-only or
+  code-evidence-only runs.
+- **Audience discipline is the whole point:** keep build/API/migration/code
+  detail in `qa-summary-dev.md`, and keep plain-language UI behaviour + manual
+  steps in `qa-summary-qa.md`. Do not mix them.
+
+### Legacy fallback — `$QA_OUT_DIR/qa-trello-summary.md`
+
+If you write only a **single** combined summary file named
+`qa-trello-summary.md` (the old shape: verdict + per-AC bullets + a Manual
+gate + screenshots line + PR link, bullets-not-tables, <2000 chars), and you
+do **not** write either split file, `qa_post.py` will still post that one file
+as a single Trello comment. This keeps older flows working — but the **two
+audience-split files are strongly preferred**. If `qa_post.py` finds either
+`qa-summary-dev.md` or `qa-summary-qa.md`, it ignores `qa-trello-summary.md`.
 
 If you only have time/budget to write one report well, write the full
-`qa-report.md` first. The orchestrator falls back to truncating the
-full report if `qa-trello-summary.md` is missing, but the Trello card
-ends up cluttered — so writing the dedicated summary is strongly
-preferred.
+`qa-report.md` first (it goes to the PR and is the fallback source for the
+Trello body when no summary file exists).
 
 ### `$QA_OUT_DIR/qa-telemetry.json`
 
@@ -829,8 +881,11 @@ QA_NEEDS_HUMAN
 ## 9. After the run
 
 The orchestrator does:
-- Posts `$QA_OUT_DIR/qa-trello-summary.md` as a Trello card comment
-  (or truncated `qa-report.md` if the summary file is missing)
+- Posts `$QA_OUT_DIR/qa-summary-dev.md` and `$QA_OUT_DIR/qa-summary-qa.md`
+  as **two** Trello card comments (developer summary + QA/UX summary, each
+  with an audience header). If only one is written it posts just that one;
+  if neither is written it falls back to the legacy single
+  `qa-trello-summary.md` (or a truncated `qa-report.md` if that's missing too)
 - Posts `$QA_OUT_DIR/qa-report.md` as a GitHub PR comment
 - Moves Trello card according to verdict
 - Cleans `$QA_OUT_DIR` (you don't need to)

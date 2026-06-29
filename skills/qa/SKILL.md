@@ -259,10 +259,29 @@ reviewer has evidence. Verify with `ls "$QA_OUT_DIR"` before finishing.
 - `$QA_OUT_DIR/qa-report.md` — full report → GitHub PR (playbook §8 shape:
   per-AC table with file:line / test-name evidence, run summary, issues,
   recommendations, `HIGH_RISK:` header line when applicable).
-- `$QA_OUT_DIR/qa-trello-summary.md` — short summary → Trello card. **Bullet
-  lists, NOT markdown tables** (Trello doesn't render tables). Sections:
-  verdict, per-AC bullets (≤80 chars evidence), Manual gate (specific
-  steps), screenshots line, PR link. Target <2000 chars, min 200.
+- `$QA_OUT_DIR/qa-summary-dev.md` — **DEVELOPER** summary → Trello comment #1.
+  Audience: the dev who must merge/deploy. Technical: verdict + one-line why;
+  full-solution / build result (compile errors/warnings); API / xUnit results;
+  code-level findings with `file:line`; migration / schema concerns +
+  `HIGH_RISK` gates; architecture notes; per-AC technical evidence (test
+  names, `file:line`); exactly what the dev must fix or verify before
+  merge/deploy. **Bullet lists, NOT markdown tables** (Trello doesn't render
+  tables). Target <2000 chars.
+- `$QA_OUT_DIR/qa-summary-qa.md` — **QA-PERSON** summary → Trello comment #2.
+  Audience: a manual tester / UX reviewer (Giedrė). Plain-language, **UI/UX
+  only**: verdict in user terms; per-UI-AC functional + visual bullets ("the X
+  button works", "the Y screen renders correctly", "upload/save/remove works",
+  any visual defect); a `Screenshots:` line; and concrete **manual
+  click-through steps** for the tester to verify on the real UI (navigation +
+  expected result), especially for gates needing human eyes. **EXPLICITLY
+  OMIT** build errors / "0 errors" / migrations / code internals / architecture
+  — the QA person does not care about those. **Bullets, NOT tables.** Target
+  <2000 chars.
+- `$QA_OUT_DIR/qa-trello-summary.md` — *(legacy, optional)* the old single
+  combined summary. Still honoured as a **fallback**: if neither
+  `qa-summary-dev.md` nor `qa-summary-qa.md` is written, `qa_post.py` posts
+  this single file as one Trello comment (same bullets-not-tables / <2000-char
+  rules). Prefer writing the two split files above.
 - `$QA_OUT_DIR/qa-telemetry.json` — structured counts **including the final
   `verdict`** (playbook §8 shape) — `qa_post.py` reads the verdict from here.
 
@@ -292,11 +311,16 @@ python3 scripts/qa_post.py "$QA_TICKET"               # comment Trello + PR, att
 ```
 
 `qa_post.py` reads the verdict from `qa-telemetry.json` (override with
-`--verdict`), posts `qa-trello-summary.md` to the card and `qa-report.md`
-to the PR, attaches every screenshot, and moves the card by verdict (only
-if the `TRELLO_LIST_*` ids are configured). It skips Trello/GitHub
-gracefully when creds or the PR url are absent. **If the user asked only to
-verify locally, stop after Step 7 / `--dry-run` and don't post.**
+`--verdict`). It posts **two Trello comments** — one from `qa-summary-dev.md`
+(👨‍💻 Developer summary) and one from `qa-summary-qa.md` (🧪 QA / UX summary),
+each with its own audience header — then posts `qa-report.md` to the PR,
+attaches every screenshot, and moves the card by verdict (only if the
+`TRELLO_LIST_*` ids are configured). If only one of the two summary files
+exists it posts just that one; if **neither** exists it falls back to a single
+legacy comment from `qa-trello-summary.md` (then `qa-report.md`). It skips
+Trello/GitHub gracefully when creds or the PR url are absent. **If the user
+asked only to verify locally, stop after Step 7 / `--dry-run` and don't
+post.**
 
 ### Step 8b — Attach evidence to the Trello card only (no PR)
 
@@ -371,8 +395,10 @@ How the steps change:
 
 ## Hard rules (carried over from the qa-runner agent)
 
-- **Always Write `qa-report.md` + `qa-trello-summary.md` before the
-  verdict.** This is the single most common failure mode — don't be it.
+- **Always Write `qa-report.md` + the two Trello summaries
+  (`qa-summary-dev.md` + `qa-summary-qa.md`) before the verdict** (the legacy
+  single `qa-trello-summary.md` is only a fallback). This is the single most
+  common failure mode — don't be it.
 - **Never touch production source** (anything outside test projects /
   `QaScratch/`). Found a prod bug? Report it; don't fix it.
 - **Never `git push`/commit, never open/comment PRs or move cards yourself**
@@ -415,7 +441,7 @@ config/.secrets(.example)       ← secrets only (gitignored: tokens + passwords
 scripts/lib.sh            ← source first: env setup (port of helpers.agent_env)
 scripts/qa_setup.py       ← first-run gate / doctor: detect missing vars+creds+tools, --init scaffolds config
 scripts/qa_prepare.py     ← resolve PR + checkout + collect inputs (pipeline §0-4); --remote = GitHub-only, no checkout
-scripts/qa_post.py        ← publish to Trello + PR (pipeline §6-10), supports --dry-run
+scripts/qa_post.py        ← publish to Trello + PR (pipeline §6-10): two Trello comments (dev + qa/ux summaries; legacy single-summary fallback), full report → PR, supports --dry-run
 scripts/qa_attach.py      ← attach evidence to Trello card only; guards vs duplicate QA evidence (asks before re-attaching)
 prompts/qa-card.md        ← the authoritative QA playbook (read every run)
 knowledge/*.md            ← confirmed selectors, flows, lessons (read every run)

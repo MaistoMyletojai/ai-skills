@@ -14,10 +14,20 @@ optional and gated:
 
 Reads from $QA_OUT_DIR (defaults to <data-root>/runs/<ticket>):
   qa-report.md          → GitHub PR comment (full report)
-  qa-trello-summary.md  → Trello card comment (short summary)
+  qa-summary-dev.md     → Trello comment #1 — DEVELOPER (technical) summary
+  qa-summary-qa.md      → Trello comment #2 — QA-PERSON (UI/UX) summary
+  qa-trello-summary.md  → Trello card comment (LEGACY fallback, single summary)
   qa-telemetry.json     → verdict + pr_url (when not passed on the CLI)
   screenshots/*.png     → attached to the Trello card
   playwright-artifacts/**/*.png → failure shots, attached too
+
+Trello posting (in priority order):
+  1. If qa-summary-dev.md and/or qa-summary-qa.md exist & are non-empty,
+     post each present one as its OWN Trello comment (dev first, then qa),
+     each with an audience header line. This is the preferred path.
+  2. If NEITHER of the two split summaries exists, fall back to the legacy
+     single comment built from qa-trello-summary.md → qa-report.md → a
+     minimal synthesized body (the original behaviour, unchanged).
 
 Usage:
   python3 qa_post.py <ticket> [--verdict QA_APPROVED] [--card <id>]
@@ -93,8 +103,10 @@ def _read_report(qa_dir: Path, verdict: str, ticket: str) -> tuple[str, str]:
     report_path = qa_dir / "qa-report.md"
     if report_path.exists() and report_path.read_text().strip():
         return report_path.read_text(), "qa-report.md"
+    skip = ("qa-report.md", "qa-trello-summary.md",
+            "qa-summary-dev.md", "qa-summary-qa.md")
     other = [p for p in sorted(qa_dir.glob("*.md"))
-             if p.name not in ("qa-report.md", "qa-trello-summary.md")
+             if p.name not in skip
              and p.is_file() and p.stat().st_size > 0]
     if other:
         return ("\n\n---\n\n".join(p.read_text() for p in other),
@@ -103,9 +115,41 @@ def _read_report(qa_dir: Path, verdict: str, ticket: str) -> tuple[str, str]:
             f"`{qa_dir}`. Verdict: {verdict}.\n", "stub")
 
 
+def _truncate(body: str, pr_url: str | None) -> str:
+    """Trim a comment body to Trello's limit, appending a PR pointer."""
+    if len(body) <= TRELLO_MAX:
+        return body
+    cut = body[:TRELLO_MAX].rsplit("\n", 1)[0]
+    if pr_url:
+        cut += f"\n\n---\n*Truncated for Trello — full report on GitHub: {pr_url}*"
+    return cut
+
+
+def _two_summaries(qa_dir: Path) -> tuple[str | None, str | None]:
+    """Load the two audience-split summaries written by the agent.
+
+    Returns (dev_body, qa_body); each element is the file's text (str) when
+    the file exists and is non-empty, otherwise None. When neither file is
+    present the caller falls back to the legacy single-summary path.
+    """
+    def _load(name: str) -> str | None:
+        p = qa_dir / name
+        if p.exists():
+            txt = p.read_text()
+            if txt.strip():
+                return txt
+        return None
+
+    return _load("qa-summary-dev.md"), _load("qa-summary-qa.md")
+
+
 def _trello_body(qa_dir: Path, report_md: str, verdict: str,
                  ticket: str, pr_url: str | None) -> tuple[str, str]:
-    """Trello body selection + truncation (ported from pipeline.py step 8)."""
+    """LEGACY single-comment Trello body selection + truncation.
+
+    Used only when neither qa-summary-dev.md nor qa-summary-qa.md exists.
+    (Ported from pipeline.py step 8.)
+    """
     summary_path = qa_dir / "qa-trello-summary.md"
     if summary_path.exists() and summary_path.read_text().strip():
         body = summary_path.read_text()
@@ -193,21 +237,42 @@ def main() -> None:
                     pass
 
     report_md, rsrc = _read_report(qa_dir, verdict, digits)
-    trello_body, tsrc = _trello_body(qa_dir, report_md, verdict, digits, pr_url)
     shots = _collect_shots(qa_dir)
     move_to = _move_target(verdict)
 
+    # ── Trello body selection: two audience-split summaries, else legacy ──
+    dev_body, qa_body = _two_summaries(qa_dir)
+    # Build the (header, body, source-label) list of comments we will post.
+    trello_comments: list[tuple[str, str]] = []  # (body, source-label)
+    if dev_body is not None or qa_body is not None:
+        if dev_body is not None:
+            header = f"👨‍💻 **QA #{digits} — Developer summary**\n\n"
+            trello_comments.append((_truncate(header + dev_body, pr_url),
+                                    "qa-summary-dev.md"))
+        if qa_body is not None:
+            header = f"🧪 **QA #{digits} — QA / UX summary**\n\n"
+            trello_comments.append((_truncate(header + qa_body, pr_url),
+                                    "qa-summary-qa.md"))
+    else:
+        body, tsrc = _trello_body(qa_dir, report_md, verdict, digits, pr_url)
+        trello_comments.append((body, tsrc))
+
     log(f"verdict={verdict}  card={card_id}  pr={pr_url}")
-    log(f"report source={rsrc} ({len(report_md)} chars) · trello source={tsrc} "
-        f"({len(trello_body)} chars) · {len(shots)} screenshot(s) · "
-        f"move→{move_to or '(stay)'}")
+    log(f"report source={rsrc} ({len(report_md)} chars) · "
+        f"{len(shots)} screenshot(s) · move→{move_to or '(stay)'}")
+    log("trello comments (" + str(len(trello_comments)) + "):")
+    for body, tsrc in trello_comments:
+        log(f"  • {tsrc} ({len(body)} chars)")
 
     if args.dry_run:
         log("── DRY RUN — nothing posted ──")
         print(json.dumps({
             "dry_run": True, "verdict": verdict, "card_id": card_id,
             "pr_url": pr_url, "report_chars": len(report_md),
-            "trello_chars": len(trello_body),
+            "trello_comments": [
+                {"source": tsrc, "chars": len(body)}
+                for body, tsrc in trello_comments
+            ],
             "screenshots": [n for _, n in shots],
             "would_move_to": move_to or None,
         }, indent=2))
@@ -215,15 +280,22 @@ def main() -> None:
 
     posted: list[str] = []
 
-    # 1. Trello comment.
+    # 1. Trello comment(s) — one per audience summary (dev + qa), or one legacy.
     if card_id:
-        r = sh([str(TRELLO_SH), "comment", card_id, trello_body[:TRELLO_MAX]])
-        posted.append("✓ Trello" if r.returncode == 0
-                      else f"✗ Trello — {(r.stderr or '').strip()[:80]}")
+        for body, tsrc in trello_comments:
+            r = sh([str(TRELLO_SH), "comment", card_id, body[:TRELLO_MAX]])
+            if tsrc == "qa-summary-dev.md":
+                label = "Trello(dev)"
+            elif tsrc == "qa-summary-qa.md":
+                label = "Trello(qa)"
+            else:
+                label = "Trello"
+            posted.append(f"✓ {label}" if r.returncode == 0
+                          else f"✗ {label} — {(r.stderr or '').strip()[:80]}")
     else:
         posted.append("✗ Trello — no card id")
 
-    # 2. GitHub PR comment.
+    # 2. GitHub PR comment (full report — UNCHANGED).
     if pr_url:
         r = sh(["gh", "pr", "comment", pr_url, "--body", report_md])
         posted.append("✓ PR" if r.returncode == 0
