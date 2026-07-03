@@ -249,6 +249,39 @@ a *visually* broken element is a bug → mark it `FAIL`. **Eshop AC always
 require a screenshot** — a spec with no `shotWithHighlight` call downgrades
 that AC to `NEEDS_HUMAN`.
 
+### Step 5b — Screenshot evidence is MANDATORY for any UI change (HARD RULE)
+
+**If the ticket changes UI or affects UI functionality, the run MUST include
+at least one GENUINE QA-captured screenshot of the changed UI.** Non-negotiable
+and now mechanically enforced by `qa_attach.py` / `qa_post.py`.
+
+- A **genuine capture** is a screenshot your QA run actually produced — a
+  Playwright `shotWithHighlight` from a tier runner, saved as
+  `ac-<n>-*.png` / `eshop-ac-<n>-*.png` / `orders-ac-<n>-*.png` /
+  `cross-system-*.png` in `$QA_OUT_DIR/screenshots/`.
+- The ticket's **own design / mockup / Figma / reference images do NOT
+  count**, and must never be presented as evidence. Do NOT copy the card's
+  design image into `screenshots/` and pass it off as a QA result. (That was
+  a real miss on #5078.) Reference images may be kept only if named with a
+  `reference`/`design` marker — attached as context, never counted as evidence.
+- **Hard-to-reach or gated UI is not an excuse.** If the surface needs
+  specific state (a modal that only opens after an order, a venue-gated
+  control, a specific role), FORCE that state to capture it: mock the API
+  response with `page.route(...)`, inject the required redux/localStorage
+  state, drive the flow with a sentinel, or render the component in
+  isolation. Capture the real rendered pixels.
+- **Only if a capture is genuinely impossible**, set the verdict to
+  `QA_NEEDS_HUMAN`, state exactly why in the report, and pass
+  `--allow-no-shots` when publishing (a loud, documented exception). A
+  UI-affecting run that silently ships without a genuine screenshot is a QA
+  failure.
+
+Record the signal in `qa-telemetry.json`: set `"ui_change": true` whenever
+any AC is `admin-ui` / `eshop-ui` / `orders-ui` / `cross-system` (or the
+change is otherwise visual), plus `"live_screenshots_captured": <n>`. Both
+publish scripts **refuse (exit 3)** when `ui_change` is expected and no
+genuine capture exists, unless `--allow-no-shots` is given.
+
 ### Step 6 — Write the outputs (use the Write tool — this is the #1 failure mode)
 
 You **MUST** write these files into `$QA_OUT_DIR` before declaring a
@@ -399,6 +432,11 @@ How the steps change:
   (`qa-summary-dev.md` + `qa-summary-qa.md`) before the verdict** (the legacy
   single `qa-trello-summary.md` is only a fallback). This is the single most
   common failure mode — don't be it.
+- **Any UI change ⇒ a GENUINE QA screenshot, ALWAYS** (Step 5b). The card's
+  own design/mockup/Figma image is NOT evidence — never attach it as such.
+  Force gated/hard-to-reach UI open (API mock, redux injection, isolated
+  render) and capture the real pixels. Truly un-capturable → `QA_NEEDS_HUMAN`
+  + `--allow-no-shots`. Publish scripts refuse (exit 3) otherwise.
 - **Never touch production source** (anything outside test projects /
   `QaScratch/`). Found a prod bug? Report it; don't fix it.
 - **Never `git push`/commit, never open/comment PRs or move cards yourself**
