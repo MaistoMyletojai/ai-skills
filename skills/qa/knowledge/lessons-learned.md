@@ -638,3 +638,38 @@ even though the bound value (null) is functionally the primary language. AC2 is
 functionally correct but the default isn't shown to the user — keep flagging this
 as a PASS-with-UX-note for a human/PM eyeball, not a FAIL. Open panel correctly
 shows: Default (primary language), Lietuvių, English, Norwegian (test org).
+
+---
+
+## RULE — Any UI change ships a GENUINE screenshot; design images are NOT evidence (2026-07-03)
+
+Concrete miss on **#5078** (QR "Scan and pay" popup — CTA hierarchy + light
+toggle): the run posted the ticket's own *design reference* image to the
+Trello card and treated it as screenshot evidence. It isn't. No live capture
+of the actual change was ever produced.
+
+The rule, now mechanically enforced (`scripts/qa_evidence.py`, wired into
+`qa_attach.py` + `qa_post.py`, exit code 3):
+
+- If a ticket changes UI or affects UI functionality, the run MUST include ≥1
+  **genuine** QA capture in `$QA_OUT_DIR/screenshots/` — a Playwright
+  `shotWithHighlight` named `ac-<n>-*` / `eshop-ac-<n>-*` / `orders-ac-<n>-*`
+  / `cross-system-*`.
+- The card's OWN design / mockup / Figma / reference images do NOT count.
+  Never copy the design image into `screenshots/` and pass it off as a result.
+  Files whose name contains design|reference|ref-|mockup|figma|ticket|
+  spec-image|prefix are classified reference-only and ignored by the gate.
+- Gated / hard-to-reach UI is NOT an excuse. Force the state: `page.route(...)`
+  API mock, redux/localStorage injection, sentinel-driven flow, or isolated
+  component render. Example for #5078: the QR modal only opens after an order
+  and the light bulb is venue-gated to Apollo Cinema — both are forceable by
+  mocking the create-order response (to set `qrPaymentUrl`) and injecting a
+  cinema `restaurantId` into redux so `useIsScreenDimVenue()` is true.
+- Set `"ui_change": true` + `"live_screenshots_captured": <n>` in
+  `qa-telemetry.json`. Only when a capture is genuinely impossible: verdict
+  `QA_NEEDS_HUMAN`, explain why, and publish with `--allow-no-shots`.
+
+Also fixed here: `qa_attach.py` now posts the two split summaries
+(`qa-summary-qa.md` + `qa-summary-dev.md`), not just the legacy
+`qa-trello-summary.md` — previously it silently posted no comment when only
+the split files existed.

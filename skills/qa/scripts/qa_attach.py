@@ -21,9 +21,11 @@ QA evidence".
 Usage:
   python3 qa_attach.py <ticket> [--card <id>] [--out <dir>]
                        [--confirm] [--no-comment] [--report-only]
+                       [--allow-no-shots]
 Exit codes:
   0 — attached successfully (or nothing to attach)
   2 — existing QA evidence found and --confirm not given (caller should ask)
+  3 — UI-affecting ticket with NO genuine screenshot (pass --allow-no-shots to override)
   1 — error (no output dir, no card id, etc.)
 """
 from __future__ import annotations
@@ -34,6 +36,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import qa_evidence  # noqa: E402
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 TRELLO_SH = SKILL_ROOT / "tools" / "trello.sh"
@@ -109,6 +114,9 @@ def main() -> None:
                     help="attach files only; don't post the summary comment")
     ap.add_argument("--report-only", action="store_true",
                     help="attach the report only; skip screenshots")
+    ap.add_argument("--allow-no-shots", action="store_true",
+                    help="publish a UI-affecting run even with NO genuine "
+                         "screenshot (loud exception; verdict must be NEEDS_HUMAN)")
     args = ap.parse_args()
 
     digits = re.sub(r"\D", "", args.ticket) or args.ticket
@@ -134,10 +142,30 @@ def main() -> None:
 
     # Gather local evidence.
     report = qa_dir / "qa-report.md"
-    summary = qa_dir / "qa-trello-summary.md"
+    # Summary comment source: prefer the two split summaries (qa-person first,
+    # then developer); fall back to the legacy single combined summary.
+    summary_paths = [p for p in (qa_dir / "qa-summary-qa.md",
+                                 qa_dir / "qa-summary-dev.md",
+                                 qa_dir / "qa-trello-summary.md")
+                     if p.exists() and p.read_text().strip()]
+    # De-dup: if a split summary exists, don't also post the legacy combined one.
+    if len(summary_paths) > 1 and (qa_dir / "qa-trello-summary.md") in summary_paths \
+            and any(p.name.startswith("qa-summary-") for p in summary_paths):
+        summary_paths = [p for p in summary_paths if p.name != "qa-trello-summary.md"]
     shots = sorted((qa_dir / "screenshots").glob("*.png")) if (qa_dir / "screenshots").exists() else []
     if args.report_only:
         shots = []
+
+    # ── HARD GATE: UI-affecting run must carry a genuine screenshot ──
+    ok, reason, ev = qa_evidence.check_ui_evidence(qa_dir)
+    if not ok and not args.allow_no_shots:
+        log(f"✗ REFUSING to attach — {reason}")
+        print(json.dumps({"status": "missing_ui_evidence", "card_id": card_id,
+                          "reason": reason, "evidence": ev}, indent=2))
+        sys.exit(3)
+    if not ok and args.allow_no_shots:
+        log("⚠ --allow-no-shots: publishing UI run with NO genuine screenshot "
+            "(verdict should be QA_NEEDS_HUMAN).")
 
     # ── Guard: is there already QA evidence on the card? ──
     existing = existing_qa_evidence(card_id)
@@ -160,16 +188,18 @@ def main() -> None:
             "would_attach": {
                 "report": report.name if report.exists() else None,
                 "screenshots": [p.name for p in shots],
-                "comment": (not args.no_comment) and summary.exists(),
+                "comments": [] if args.no_comment else [p.name for p in summary_paths],
             },
         }, indent=2))
         sys.exit(2)
 
     # ── Attach ──
     posted: list[str] = []
-    if not args.no_comment and summary.exists() and summary.read_text().strip():
-        r = sh([str(TRELLO_SH), "comment", card_id, summary.read_text()[:16000]])
-        posted.append("✓ comment" if r.returncode == 0 else "✗ comment")
+    if not args.no_comment:
+        for sp in summary_paths:
+            r = sh([str(TRELLO_SH), "comment", card_id, sp.read_text()[:16000]])
+            posted.append(f"✓ comment({sp.name})" if r.returncode == 0
+                          else f"✗ comment({sp.name})")
     if report.exists() and report.read_text().strip():
         r = sh([str(TRELLO_SH), "attach", card_id, str(report), f"QA-Report-{digits}.md"])
         posted.append("✓ report" if r.returncode == 0 else "✗ report")

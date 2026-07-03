@@ -196,6 +196,9 @@ def main() -> None:
     ap.add_argument("--pr", default=None, help="PR URL (default: read qa-telemetry.json / qa-pr.json)")
     ap.add_argument("--out", default=None, help="QA_OUT_DIR override")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--allow-no-shots", action="store_true",
+                    help="publish a UI-affecting run even with NO genuine "
+                         "screenshot (loud exception; verdict must be NEEDS_HUMAN)")
     args = ap.parse_args()
 
     import re
@@ -205,6 +208,19 @@ def main() -> None:
     if not qa_dir.exists():
         log(f"✗ output dir not found: {qa_dir}")
         sys.exit(1)
+
+    # ── HARD GATE: UI-affecting run must carry a genuine screenshot ──
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import qa_evidence  # noqa: E402
+    _ok, _reason, _ev = qa_evidence.check_ui_evidence(qa_dir)
+    if not _ok and not args.allow_no_shots:
+        log(f"✗ REFUSING to publish — {_reason}")
+        print(json.dumps({"status": "missing_ui_evidence", "reason": _reason,
+                          "evidence": _ev}, indent=2))
+        sys.exit(3)
+    if not _ok and args.allow_no_shots:
+        log("⚠ --allow-no-shots: publishing UI run with NO genuine screenshot "
+            "(verdict should be QA_NEEDS_HUMAN).")
 
     # ── resolve verdict ──
     verdict = args.verdict
