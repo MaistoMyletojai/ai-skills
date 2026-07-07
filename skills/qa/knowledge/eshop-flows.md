@@ -333,3 +333,14 @@ test('Admin change is reflected in eshop', async () => {
 fetches the updated value on reload. Test the full DB round-trip — don't
 mock either side. Cross-system tests are slower (~30-60s) but give the
 strongest signal for "did this actually change behavior."
+
+---
+
+## Flow 8: Reach the QR "Scan and pay" modal + run the eshop locally
+
+Payment-gated (the modal only opens after a real web-payment order) and there's
+a localhost-Origin blocker. Full recipe — how to start the eshop, the known
+Apollo Cinema test tablet, the real-Origin HTTPS + Chromium host-resolver
+technique (no mocks, no sudo), and dual-viewport rules — lives in a dedicated
+doc: **`knowledge/eshop-local-run.md`**. Read it before any QR-payment or
+payment-gated eshop spec.

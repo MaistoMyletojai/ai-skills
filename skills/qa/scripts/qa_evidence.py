@@ -39,6 +39,11 @@ _REFERENCE_MARKERS = ("design", "reference", "ref-", "mockup",
 _UI_TIERS = {"admin-ui", "eshop-ui", "orders-ui", "cross-system"}
 _UI_SURFACES = {"admin-ui", "eshop-ui", "orders-ui", "eshop", "admin", "orders"}
 
+# evidence_source values that are NOT the real running application. Screenshots
+# from these are staged/synthetic and must never count as QA evidence.
+_FORBIDDEN_SOURCES = {"harness", "isolated", "mock", "mocked", "staged",
+                      "component", "storybook", "synthetic"}
+
 
 def _is_reference(name: str) -> bool:
     n = (name or "").lower()
@@ -94,6 +99,17 @@ def ui_change_expected(qa_dir: Path) -> bool:
     return False
 
 
+def _evidence_source(qa_dir: Path) -> str:
+    """Read qa-telemetry.json `evidence_source` (default 'real-app' if absent)."""
+    tel = Path(qa_dir) / "qa-telemetry.json"
+    if not tel.exists():
+        return "real-app"
+    try:
+        return str(json.loads(tel.read_text()).get("evidence_source", "real-app")).lower().strip()
+    except Exception:
+        return "real-app"
+
+
 def check_ui_evidence(qa_dir: Path) -> tuple[bool, str, dict]:
     """Gate result: (ok, reason, details).
 
@@ -104,11 +120,25 @@ def check_ui_evidence(qa_dir: Path) -> tuple[bool, str, dict]:
     ui = ui_change_expected(qa_dir)
     shots = genuine_shots(qa_dir)
     refs = reference_shots(qa_dir)
+    source = _evidence_source(qa_dir)
     details = {
         "ui_change_expected": ui,
         "genuine_shots": [p.name for p in shots],
         "reference_only": [p.name for p in refs],
+        "evidence_source": source,
     }
+    # Staged/synthetic evidence (isolated harness, mocked store, fabricated
+    # props) is never acceptable — it doesn't exercise the real running app.
+    if ui and source in _FORBIDDEN_SOURCES:
+        reason = (
+            f"Evidence source is '{source}' — staged/synthetic renders (isolated "
+            "harness, mocked redux store, fabricated props) are NOT QA evidence. "
+            "Capture the ACTUAL running application driven through its real flow "
+            "against the real backend. If the state can't be reached on QA infra, "
+            "set the verdict to QA_NEEDS_HUMAN and say what's needed — do not "
+            "synthesize."
+        )
+        return False, reason, details
     if ui and not shots:
         reason = (
             "UI-affecting ticket has NO genuine QA screenshot. "
