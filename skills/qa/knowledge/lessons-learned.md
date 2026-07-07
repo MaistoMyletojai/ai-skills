@@ -673,3 +673,41 @@ Also fixed here: `qa_attach.py` now posts the two split summaries
 (`qa-summary-qa.md` + `qa-summary-dev.md`), not just the legacy
 `qa-trello-summary.md` — previously it silently posted no comment when only
 the split files existed.
+
+---
+
+## RULE — QA evidence MUST come from the real running application, never a staged harness (2026-07-03)
+
+Second miss on **#5078**: after being told to always capture a real screenshot,
+the run captured one by mounting the REAL `QrPaymentModal` in an isolated Vite
+harness with a self-populated redux store (`restaurantId` faked to the cinema
+venue) and fabricated props, then posted those as evidence. That is NOT testing
+the running application — it's staging a render of your own making. It can pass
+while the real app + real backend behave differently. Rejected and removed.
+
+Hard rule (now enforced in `qa_evidence.py` via `evidence_source`):
+- Evidence = screenshots of the ACTUAL running application, driven through its
+  real user flow against the real (dev) backend. Nothing else counts.
+- FORBIDDEN as evidence: isolated component harness, component mounted with a
+  mocked/hand-built redux store, fabricated props, storybook, any staged render.
+- Prefer the real backend over `page.route` mocks. If a mock is unavoidable to
+  reach a state, disclose it; it caps the verdict at `QA_NEEDS_HUMAN`.
+- To reach a gated/hard state, drive the REAL flow / use REAL test data (a real
+  cinema tablet token, an actual test order) — do not fabricate the state.
+- If it can't be reached on QA infra: verdict `QA_NEEDS_HUMAN`, state exactly
+  what's needed (real cinema tablet, permission to place a dev order, kiosk
+  eyeball) and ask. Do NOT synthesize evidence to close the gap.
+- Set `"evidence_source": "real-app"` in telemetry; `harness`/`isolated`/`mock`/
+  `staged` are rejected by the gate (exit 3).
+
+---
+
+## RULE — eshop visual QA runs BOTH mobile and desktop, always (2026-07-03)
+
+Every eshop UI AC must be captured on BOTH viewports: mobile 390×844 AND
+desktop 1366×900. Never verify a single viewport. Name captures with a
+`-mobile` / `-desktop` suffix (`eshop-ac-<n>-<short>-mobile.png` /
+`-desktop.png`) — both still match the evidence-gate capture pattern.
+Mobile-only concerns (bottom-sheet height/margins, cutoffs, sticky footers)
+must be shown specifically on the mobile viewport. Origin of rule: #5078 had
+a mobile-only full-screen-sheet fix that a desktop-only capture would miss.

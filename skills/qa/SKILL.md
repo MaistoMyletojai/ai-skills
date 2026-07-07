@@ -255,10 +255,26 @@ that AC to `NEEDS_HUMAN`.
 at least one GENUINE QA-captured screenshot of the changed UI.** Non-negotiable
 and now mechanically enforced by `qa_attach.py` / `qa_post.py`.
 
-- A **genuine capture** is a screenshot your QA run actually produced — a
+- A **genuine capture** is a screenshot of the **actual running application**,
+  driven through its real user flow against the real (dev) backend — a
   Playwright `shotWithHighlight` from a tier runner, saved as
   `ac-<n>-*.png` / `eshop-ac-<n>-*.png` / `orders-ac-<n>-*.png` /
   `cross-system-*.png` in `$QA_OUT_DIR/screenshots/`.
+- **FORBIDDEN — staged/synthetic evidence.** NEVER capture from an isolated
+  component harness, a component mounted with a self-populated / mocked redux
+  store, fabricated props, or any hand-staged render. Rendering the component
+  with state YOU supplied proves nothing about the real app + real backend and
+  is not QA evidence. (Real miss on #5078 — do not repeat it.) Prefer the real
+  backend over `page.route` mocks; if you must mock a response to reach a
+  state, disclose it and it caps the verdict at `QA_NEEDS_HUMAN`.
+- To reach a state that needs setup (a real order, a specific venue/tablet, a
+  role), drive the REAL flow / use REAL test data (e.g. a real cinema tablet
+  token, an actual test order). Do not fabricate the state. If it genuinely
+  cannot be reached in the running app on available QA infra, the verdict is
+  `QA_NEEDS_HUMAN` — state exactly what's needed and ask; do NOT synthesize.
+- Record provenance in `qa-telemetry.json`: `"evidence_source": "real-app"`
+  (the only value that permits a clean pass). `harness` / `isolated` / `mock`
+  / `staged` are rejected by the evidence gate.
 - The ticket's **own design / mockup / Figma / reference images do NOT
   count**, and must never be presented as evidence. Do NOT copy the card's
   design image into `screenshots/` and pass it off as a QA result. (That was
@@ -281,6 +297,12 @@ any AC is `admin-ui` / `eshop-ui` / `orders-ui` / `cross-system` (or the
 change is otherwise visual), plus `"live_screenshots_captured": <n>`. Both
 publish scripts **refuse (exit 3)** when `ui_change` is expected and no
 genuine capture exists, unless `--allow-no-shots` is given.
+
+- **eshop visual QA runs BOTH viewports, always.** Capture every eshop UI AC
+  on mobile **390×844** AND desktop **1366×900** — never just one. Suffix the
+  files `-mobile` / `-desktop` (e.g. `eshop-ac-1-cta-mobile.png`). Mobile-only
+  behavior (bottom-sheet height/margins, cutoffs, sticky footers) must be
+  shown on the mobile viewport specifically.
 
 ### Step 6 — Write the outputs (use the Write tool — this is the #1 failure mode)
 
